@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Générateur de Facture Conforme V2</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); max-width: 800px; margin: auto; }
+        h1, h2, h3 { text-align: center; color: #333; }
+        label { display: block; margin-top: 12px; margin-bottom: 3px; color: #555; font-weight: bold;}
+        input[type="text"], input[type="url"], input[type="number"], input[type="date"], textarea, select {
+            width: calc(100% - 22px); padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; margin-bottom: 5px;
+        }
+        textarea { resize: vertical; min-height: 50px; }
+        button { padding: 10px 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; margin-top: 10px; }
+        button:hover { background-color: #0056b3; }
+        #generatePdfBtn { width: 100%; padding: 12px; margin-top: 30px; background-color: #17a2b8; }
+        #generatePdfBtn:hover { background-color: #138496; }
+        .invoice-item { border: 1px solid #eee; padding: 15px; margin-bottom: 15px; border-radius: 4px; background-color: #f9f9f9; }
+        .invoice-item .item-inputs { display: flex; gap: 10px; flex-wrap: wrap; }
+        .invoice-item .item-inputs > div { flex: 1; min-width: 120px;}
+        .remove-item-btn { background-color: #dc3545; float: right; margin-top: 0; margin-bottom: 5px;}
+        .remove-item-btn:hover { background-color: #c82333; }
+        #addItemBtn { background-color: #28a745; margin-bottom: 20px; }
+        #addItemBtn:hover { background-color: #218838; }
+        #totalsSummary { margin-top: 20px; font-size: 1.1em; text-align: right; }
+        #totalsSummary div { margin-bottom: 5px; }
+        #qrcodeCanvas { display: none; }
+        .form-section { border-bottom: 1px dashed #ccc; padding-bottom: 15px; margin-bottom: 15px; }
+        .form-section:last-of-type { border-bottom: none; }
+        .vat-option { margin-top: 10px; }
+        .vat-option label { font-weight: normal; display: inline; margin-left: 5px; cursor: pointer; }
+        .vat-option input {cursor: pointer;}
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Générateur de Facture Conforme (France)</h1>
+
+        <div class="form-section">
+            <h2>Votre Société (Vendeur)</h2>
+            <label for="companyName">Nom de la société/Raison sociale:</label>
+            <input type="text" id="companyName" value="Ma Super Entreprise SARL" required>
+
+            <label for="companyAddress">Adresse complète:</label>
+            <textarea id="companyAddress" required>123 Rue de l'Exemple
+75001 Paris, France</textarea>
+
+            <label for="companySiret">N° SIREN/SIRET:</label>
+            <input type="text" id="companySiret" value="12345678900012" required>
+
+            <label for="companyLegalFormCapital">Forme juridique et Capital social (si société):</label>
+            <input type="text" id="companyLegalFormCapital" value="SARL au capital de 1000€">
+
+            <label for="companyRcsRm">Mention RCS/RM (si applicable, ex: RCS Paris B 123 456 789):</label>
+            <input type="text" id="companyRcsRm" value="RCS Paris B 123 456 789">
+
+            <div class="vat-option">
+                <input type="checkbox" id="vatNotApplicable" onchange="toggleVatFields()">
+                <label for="vatNotApplicable">TVA non applicable (art. 293 B du CGI - micro-entrepreneur)</label>
+            </div>
+            
+            <div id="companyVatNumberContainer">
+                <label for="companyVatNumber">N° TVA Intracommunautaire:</label>
+                <input type="text" id="companyVatNumber" value="FR00123456789">
+            </div>
+        </div>
+
+        <div class="form-section">
+            <h2>Client (Payeur)</h2>
+            <label for="payerName">Nom du client/Raison sociale:</label>
+            <input type="text" id="payerName" value="Jean Dupont" required>
+
+            <label for="payerAddress">Adresse complète du client:</label>
+            <textarea id="payerAddress" required>456 Avenue du Client
+6900 Lyon, France</textarea>
+        </div>
+
+        <div class="form-section">
+            <h2>Informations de la Facture</h2>
+            <label for="invoiceDate">Date d'émission de la facture:</label>
+            <input type="date" id="invoiceDate" required>
+
+            <label for="serviceDate">Date de la vente / prestation de service:</label>
+            <input type="date" id="serviceDate" required>
+            
+            <label for="invoiceNumber">Numéro de facture (unique et séquentiel):</label>
+            <input type="text" id="invoiceNumber" value="" placeholder="Ex: F2024-001" required>
+
+
+            <h3>Articles/Prestations</h3>
+            <div id="invoiceItemsContainer">
+                <!-- Les articles seront ajoutés ici -->
+            </div>
+            <button type="button" id="addItemBtn" onclick="addItem()">+ Ajouter un article/prestation</button>
+
+            <div id="globalVatRateContainer">
+                <label for="globalVatRate">Taux de TVA global pour les articles (%):</label>
+                <input type="number" id="globalVatRate" value="20" step="0.01" oninput="updateTotalsDisplay()">
+            </div>
+
+            <div id="totalsSummary">
+                <div id="summaryTotalHTContainer">Total HT: <span id="totalHT">0.00</span> €</div>
+                <div id="summaryTotalTVAContainer">Total TVA: <span id="totalTVA">0.00</span> €</div>
+                <div id="summaryTotalNetContainer" style="display:none;"><strong>Net à payer: <span id="totalNet">0.00</span> €</strong></div>
+                <div id="summaryTotalTTCContainer"><strong>Total TTC: <span id="totalTTC">0.00</span> €</strong></div>
+            </div>
+        </div>
+
+        <div class="form-section">
+            <h2>Conditions de Paiement</h2>
+            <label for="paymentUrl">Lien de paiement URL (pour QR Code):</label>
+            <input type="url" id="paymentUrl" value="https://example.com/pay/invoice123">
+
+            <label for="paymentDueDate">Date d'échéance du paiement (ou conditions):</label>
+            <input type="text" id="paymentDueDate" value="Paiement à réception" required>
+
+            <label for="latePaymentPenaltyRate">Taux des pénalités de retard:</label>
+            <input type="text" id="latePaymentPenaltyRate" value="Taux d'intérêt légal majoré de 10 points" required>
+            <small>Ex: 10%, ou "Taux d'intérêt appliqué par la BCE majoré de 10 points"</small>
+        </div>
+        
+        <button id="generatePdfBtn" onclick="generateInvoice()">Générer la Facture PDF</button>
+        <div id="qrcodeCanvas"></div>
+    </div>
+
+<script>
+    const { jsPDF } = window.jspdf;
+    let itemIdCounter = 0;
+
+    document.addEventListener('DOMContentLoaded', () => {
+        const today = new Date().toISOString().split('T')[0];
+        document.getElementById('invoiceDate').value = today;
+        document.getElementById('serviceDate').value = today;
+        document.getElementById('invoiceNumber').value = `F${new Date().getFullYear()}-${String(new Date().getTime()).slice(-4)}`;
+        addItem("Consultation Stratégique", 1, 150);
+        toggleVatFields(); 
+    });
+
+    function toggleVatFields() {
+        const vatNotApplicable = document.getElementById('vatNotApplicable').checked;
+        document.getElementById('globalVatRateContainer').style.display = vatNotApplicable ? 'none' : 'block';
+        document.getElementById('companyVatNumberContainer').style.display = vatNotApplicable ? 'none' : 'block';
+        document.getElementById('companyVatNumber').required = !vatNotApplicable;
+
+        // Affichage des totaux dans le formulaire HTML
+        document.getElementById('summaryTotalHTContainer').style.display = vatNotApplicable ? 'none' : 'block';
+        document.getElementById('summaryTotalTVAContainer').style.display = vatNotApplicable ? 'none' : 'block';
+        document.getElementById('summaryTotalTTCContainer').style.display = vatNotApplicable ? 'none' : 'block';
+        document.getElementById('summaryTotalNetContainer').style.display = vatNotApplicable ? 'block' : 'none';
+        
+        updateTotalsDisplay();
+    }
+
+    function addItem(description = "Nouvelle prestation", quantity = 1, unitPriceHT = 10.00) {
+        itemIdCounter++;
+        const itemsContainer = document.getElementById('invoiceItemsContainer');
+        const newItemDiv = document.createElement('div');
+        newItemDiv.classList.add('invoice-item');
+        newItemDiv.setAttribute('id', `item-${itemIdCounter}`);
+        newItemDiv.innerHTML = `
+            <button type="button" class="remove-item-btn" onclick="removeItem('item-${itemIdCounter}')">X</button>
+            <label>Article ${itemIdCounter}</label>
+            <div class="item-inputs">
+                <div>
+                    <label for="itemDesc-${itemIdCounter}">Description:</label>
+                    <input type="text" id="itemDesc-${itemIdCounter}" class="item-description" value="${description}" required oninput="updateTotalsDisplay()">
+                </div>
+                <div>
+                    <label for="itemQty-${itemIdCounter}">Quantité:</label>
+                    <input type="number" id="itemQty-${itemIdCounter}" class="item-quantity" value="${quantity}" step="any" min="0.01" required oninput="updateTotalsDisplay()">
+                </div>
+                <div>
+                    <label for="itemPrice-${itemIdCounter}">Prix Unitaire HT (€):</label>
+                    <input type="number" id="itemPrice-${itemIdCounter}" class="item-price-ht" value="${unitPriceHT.toFixed(2)}" step="0.01" min="0" required oninput="updateTotalsDisplay()">
+                </div>
+            </div>
+        `;
+        itemsContainer.appendChild(newItemDiv);
+        updateTotalsDisplay();
+    }
+
+    function removeItem(itemId) {
+        document.getElementById(itemId)?.remove();
+        updateTotalsDisplay();
+    }
+
+    function updateTotalsDisplay() {
+        const itemElements = document.querySelectorAll('.invoice-item');
+        let totalHT = 0;
+        const vatNotApplicable = document.getElementById('vatNotApplicable').checked;
+        const globalVatRate = vatNotApplicable ? 0 : parseFloat(document.getElementById('globalVatRate').value) || 0;
+
+        itemElements.forEach(itemEl => {
+            const quantity = parseFloat(itemEl.querySelector('.item-quantity').value) || 0;
+            const priceHT = parseFloat(itemEl.querySelector('.item-price-ht').value) || 0;
+            totalHT += quantity * priceHT;
+        });
+
+        const totalTVA = vatNotApplicable ? 0 : (totalHT * (globalVatRate / 100));
+        const totalTTC = totalHT + totalTVA;
+
+        if (vatNotApplicable) {
+            document.getElementById('totalNet').textContent = totalHT.toFixed(2);
+        } else {
+            document.getElementById('totalHT').textContent = totalHT.toFixed(2);
+            document.getElementById('totalTVA').textContent = totalTVA.toFixed(2);
+            document.getElementById('totalTTC').textContent = totalTTC.toFixed(2);
+        }
+    }
+
+
+    function generateInvoice() {
+        // --- Récupération des données ---
+        const companyName = document.getElementById('companyName').value;
+        const companyAddress = document.getElementById('companyAddress').value.split('\n');
+        const companySiret = document.getElementById('companySiret').value;
+        const companyLegalFormCapital = document.getElementById('companyLegalFormCapital').value;
+        const companyRcsRm = document.getElementById('companyRcsRm').value;
+        const vatNotApplicable = document.getElementById('vatNotApplicable').checked;
+        const companyVatNumber = vatNotApplicable ? "" : document.getElementById('companyVatNumber').value;
+
+        const payerName = document.getElementById('payerName').value;
+        const payerAddress = document.getElementById('payerAddress').value.split('\n');
+
+        const invoiceDateRaw = document.getElementById('invoiceDate').value;
+        const serviceDateRaw = document.getElementById('serviceDate').value;
+        const invoiceNumber = document.getElementById('invoiceNumber').value;
+        
+        const invoiceDate = new Date(invoiceDateRaw).toLocaleDateString('fr-FR');
+        const serviceDate = new Date(serviceDateRaw).toLocaleDateString('fr-FR');
+
+        const paymentUrl = document.getElementById('paymentUrl').value;
+        const paymentDueDate = document.getElementById('paymentDueDate').value;
+        const latePaymentPenaltyRate = document.getElementById('latePaymentPenaltyRate').value;
+        const recoveryFee = "40"; 
+
+        const invoiceItems = [];
+        let calculatedTotalHT = 0;
+        const itemElements = document.querySelectorAll('.invoice-item');
+
+        if (!invoiceNumber.trim()) { alert("Veuillez renseigner un numéro de facture."); return; }
+        if (itemElements.length === 0) { alert("Veuillez ajouter au moins un article."); return; }
+
+        itemElements.forEach(itemEl => {
+            const description = itemEl.querySelector('.item-description').value;
+            const quantity = parseFloat(itemEl.querySelector('.item-quantity').value) || 0;
+            const unitPriceHT = parseFloat(itemEl.querySelector('.item-price-ht').value) || 0;
+            if (!description.trim() || quantity <= 0 || unitPriceHT < 0) {
+                 alert("Vérifiez les articles : description, quantité (>0) et prix unitaire HT (>=0) sont requis.");
+                 throw new Error("Invalid item data");
+            }
+            const itemTotalHT = quantity * unitPriceHT;
+            invoiceItems.push({ description, quantity, unitPriceHT, itemTotalHT });
+            calculatedTotalHT += itemTotalHT;
+        });
+
+        const globalVatRate = vatNotApplicable ? 0 : parseFloat(document.getElementById('globalVatRate').value) || 0;
+        const calculatedTotalTVA = vatNotApplicable ? 0 : (calculatedTotalHT * (globalVatRate / 100));
+        const calculatedTotalTTC = calculatedTotalHT + calculatedTotalTVA;
+
+        const requiredFieldsBasic = [companyName, companySiret, payerName, invoiceDateRaw, serviceDateRaw, invoiceNumber];
+        if (!vatNotApplicable && !companyVatNumber) {
+            alert("Le N° de TVA Intracommunautaire est requis si la TVA est applicable."); return;
+        }
+        if (requiredFieldsBasic.some(f => !f || (typeof f === 'string' && !f.trim()) )) {
+            alert("Veuillez remplir tous les champs obligatoires (nom société, SIRET, nom client, dates, n° facture)."); return;
+        }
+
+        // --- Génération QR Code ---
+        const qrcodeContainer = document.getElementById('qrcodeCanvas');
+        qrcodeContainer.innerHTML = ""; 
+        if (paymentUrl) { new QRCode(qrcodeContainer, { text: paymentUrl, width: 100, height: 100, correctLevel : QRCode.CorrectLevel.M }); }
+        
+        setTimeout(() => {
+            let qrCodeImage = null;
+            if (paymentUrl && qrcodeContainer.querySelector('canvas')) {
+                qrCodeImage = qrcodeContainer.querySelector('canvas').toDataURL("image/png");
+            }
+
+            // --- Création du PDF ---
+            const doc = new jsPDF();
+            const pageHeight = doc.internal.pageSize.height || doc.internal.pageSize.getHeight();
+            const pageWidth = doc.internal.pageSize.width || doc.internal.pageSize.getWidth();
+            const margin = 15;
+            let currentY = margin;
+            const smallLineHeight = 5;
+            const baseLineHeight = 7;
+
+            function checkYAddPage(spaceNeeded = 20) {
+                if (currentY + spaceNeeded > pageHeight - margin) {
+                    doc.addPage();
+                    currentY = margin;
+                    return true; 
+                }
+                return false;
+            }
+
+            doc.setFontSize(20); doc.setFont("helvetica", "bold");
+            doc.text("FACTURE", pageWidth / 2, currentY, { align: 'center' });
+            currentY += baseLineHeight * 2;
+
+            const colWidth = (pageWidth - margin * 3) / 2;
+            const initialYCol = currentY;
+            doc.setFontSize(10); doc.setFont("helvetica", "bold");
+            doc.text(companyName, margin, currentY); currentY += smallLineHeight;
+            doc.setFont("helvetica", "normal");
+            companyAddress.forEach(line => { doc.text(line, margin, currentY); currentY += smallLineHeight; });
+            doc.text(`SIRET: ${companySiret}`, margin, currentY); currentY += smallLineHeight;
+            if (companyLegalFormCapital) { doc.text(companyLegalFormCapital, margin, currentY); currentY += smallLineHeight; }
+            if (companyRcsRm) { doc.text(companyRcsRm, margin, currentY); currentY += smallLineHeight; }
+            if (vatNotApplicable) {
+                doc.text("TVA non applicable, art. 293 B du CGI", margin, currentY); currentY += smallLineHeight;
+            } else if (companyVatNumber) {
+                doc.text(`N° TVA: ${companyVatNumber}`, margin, currentY); currentY += smallLineHeight;
+            }
+            const vendeurEndY = currentY; currentY = initialYCol;
+
+            doc.setFont("helvetica", "bold");
+            doc.text("Client:", margin + colWidth + margin, currentY); currentY += smallLineHeight;
+            doc.setFont("helvetica", "normal");
+            doc.text(payerName, margin + colWidth + margin, currentY); currentY += smallLineHeight;
+            payerAddress.forEach(line => { doc.text(line, margin + colWidth + margin, currentY); currentY += smallLineHeight; });
+            const clientEndY = currentY;
+            currentY = Math.max(vendeurEndY, clientEndY) + baseLineHeight;
+
+            checkYAddPage();
+            doc.setFontSize(10);
+            doc.text(`Facture N°: ${invoiceNumber}`, margin, currentY);
+            doc.text(`Date d'émission: ${invoiceDate}`, pageWidth - margin, currentY, { align: 'right' });
+            currentY += smallLineHeight;
+            doc.text(`Date de prestation/vente: ${serviceDate}`, pageWidth - margin, currentY, { align: 'right' });
+            currentY += baseLineHeight * 1.5;
+
+            // --- Tableau des articles ---
+            checkYAddPage(30);
+            const tableStartY = currentY;
+            const tableContentBoxStartX = margin;
+            const tableContentBoxEndX = pageWidth - margin;
+            const tableContentBoxWidth = tableContentBoxEndX - tableContentBoxStartX;
+            let columnDefinitions = [];
+
+            if (vatNotApplicable) {
+                columnDefinitions = [
+                    { title: "Description", key: "description", widthRatio: 0.55, headerAlign: "left", dataAlign: "left" },
+                    { title: "Qté", key: "quantity", widthRatio: 0.13, headerAlign: "right", dataAlign: "right" },
+                    { title: "P.U. HT", key: "unitPriceHT", widthRatio: 0.16, headerAlign: "right", dataAlign: "right" },
+                    { title: "Total HT", key: "itemTotalHT", widthRatio: 0.16, headerAlign: "right", dataAlign: "right" }
+                ];
+            } else {
+                 columnDefinitions = [
+                    { title: "Description", key: "description", widthRatio: 0.43, headerAlign: "left", dataAlign: "left" },
+                    { title: "Qté", key: "quantity", widthRatio: 0.09, headerAlign: "right", dataAlign: "right" },
+                    { title: "P.U. HT", key: "unitPriceHT", widthRatio: 0.14, headerAlign: "right", dataAlign: "right" },
+                    { title: "TVA %", key: "vatRate", widthRatio: 0.14, headerAlign: "right", dataAlign: "right" },
+                    { title: "Total HT", key: "itemTotalHT", widthRatio: 0.20, headerAlign: "right", dataAlign: "right" }
+                ];
+            }
+            
+            function drawTableHeaders(yPos) {
+                doc.setFont("helvetica", "bold");
+                let currentTableXHeader = tableContentBoxStartX;
+                columnDefinitions.forEach(col => {
+                    const colWidth = tableContentBoxWidth * col.widthRatio;
+                    doc.text(col.title, col.headerAlign === 'right' ? currentTableXHeader + colWidth : currentTableXHeader, yPos, { align: col.headerAlign });
+                    currentTableXHeader += colWidth;
+                });
+                doc.setLineWidth(0.3);
+                doc.line(tableContentBoxStartX, yPos + 3, tableContentBoxEndX, yPos + 3);
+            }
+
+            drawTableHeaders(tableStartY);
+            currentY = tableStartY + 3 + (baseLineHeight * 0.8);
+
+            doc.setFont("helvetica", "normal");
+            invoiceItems.forEach(item => {
+                if (checkYAddPage(baseLineHeight * 2)) { // Si nouvelle page, redessiner les en-têtes
+                    drawTableHeaders(currentY);
+                    currentY += 3 + (baseLineHeight * 0.8);
+                }
+                const itemRowStartY = currentY;
+                let maxRowHeight = 0;
+                let currentTableXData = tableContentBoxStartX;
+
+                columnDefinitions.forEach(col => {
+                    const colWidth = tableContentBoxWidth * col.widthRatio;
+                    let cellValue = "";
+                    let textOptions = { align: col.dataAlign, maxWidth: colWidth - 2 }; 
+
+                    if (col.key === "description") {
+                        const descLines = doc.splitTextToSize(item.description, colWidth - 2);
+                        let tempY = itemRowStartY;
+                        descLines.forEach(line => {
+                            // Pas besoin de checkYAddPage ici, déjà fait pour la ligne entière
+                            doc.text(line, currentTableXData + (col.dataAlign === 'left' ? 0 : colWidth), tempY, textOptions);
+                            tempY += smallLineHeight;
+                        });
+                        maxRowHeight = Math.max(maxRowHeight, tempY - itemRowStartY);
+                    } else {
+                        if (col.key === "quantity") cellValue = item.quantity.toString();
+                        else if (col.key === "unitPriceHT") cellValue = item.unitPriceHT.toFixed(2);
+                        else if (col.key === "vatRate") cellValue = globalVatRate.toFixed(2);
+                        else if (col.key === "itemTotalHT") cellValue = item.itemTotalHT.toFixed(2);
+                        
+                        doc.text(cellValue, col.dataAlign === 'right' ? currentTableXData + colWidth : currentTableXData, itemRowStartY, textOptions);
+                        maxRowHeight = Math.max(maxRowHeight, smallLineHeight);
+                    }
+                    currentTableXData += colWidth;
+                });
+                currentY = itemRowStartY + maxRowHeight;
+                currentY += 2; // Petit espace entre les lignes d'articles
+            });
+            currentY += baseLineHeight * 0.5;
+            doc.line(tableContentBoxStartX, currentY, tableContentBoxEndX, currentY); // Ligne avant totaux
+            currentY += baseLineHeight; // Espace après la ligne, avant le premier total
+
+            // --- Totaux ---
+            checkYAddPage(vatNotApplicable ? 30 : 45);
+            const totalLabelX = pageWidth - margin - 80; // Ajuster cette valeur pour la position des labels
+            const totalValueX = pageWidth - margin;    
+            
+            if (vatNotApplicable) {
+                doc.setFont("helvetica", "bold"); doc.setFontSize(12);
+                doc.text("NET À PAYER:", totalLabelX, currentY, {align: 'left'});
+                doc.text(`${calculatedTotalHT.toFixed(2)} €`, totalValueX, currentY, {align: 'right'});
+                currentY += baseLineHeight;
+            } else {
+                doc.setFontSize(10); doc.setFont("helvetica", "normal");
+                doc.text("Total HT:", totalLabelX, currentY, {align: 'left'});
+                doc.text(`${calculatedTotalHT.toFixed(2)} €`, totalValueX, currentY, {align: 'right'});
+                currentY += baseLineHeight;
+
+                doc.text(`Total TVA (${globalVatRate.toFixed(2)}%):`, totalLabelX, currentY, {align: 'left'});
+                doc.text(`${calculatedTotalTVA.toFixed(2)} €`, totalValueX, currentY, {align: 'right'});
+                currentY += baseLineHeight;
+
+                doc.setFont("helvetica", "bold"); doc.setFontSize(12);
+                doc.text("Total TTC:", totalLabelX, currentY, {align: 'left'});
+                doc.text(`${calculatedTotalTTC.toFixed(2)} €`, totalValueX, currentY, {align: 'right'});
+            }
+            currentY += baseLineHeight * 1.5; // Espace après le bloc des totaux
+
+            // --- Conditions de paiement ---
+            checkYAddPage(40);
+            doc.setFontSize(9); doc.setFont("helvetica", "bold");
+            doc.text("Conditions de paiement:", margin, currentY); currentY += smallLineHeight;
+            doc.setFont("helvetica", "normal");
+            doc.text(`Échéance: ${paymentDueDate}`, margin, currentY); currentY += smallLineHeight;
+            doc.text(`Pénalités de retard: ${latePaymentPenaltyRate}`, margin, currentY); currentY += smallLineHeight;
+            const recoveryFeeText = `Indemnité forfaitaire pour frais de recouvrement en cas de retard de paiement: ${recoveryFee} €`;
+            const recoveryFeeLines = doc.splitTextToSize(recoveryFeeText, pageWidth - margin * 2 - (qrCodeImage ? 40 : 0) ); // Laisser place au QR
+            recoveryFeeLines.forEach(line => {
+                 if(checkYAddPage(smallLineHeight)){/* Redraw header if needed, unlikely here */}
+                 doc.text(line, margin, currentY); currentY += smallLineHeight;
+            });
+            
+            const qrCodeSize = 30;
+            const qrCodeYStart = currentY - (recoveryFeeLines.length * smallLineHeight) - (qrCodeSize/4) ; // Essayer d'aligner le QR avec les conditions
+
+            if (paymentUrl && qrCodeImage) {
+                const paymentLinkY = currentY; // Sauvegarder Y pour le lien après le QR possible
+                if (checkYAddPage(qrCodeSize + 10)) {
+                    // Si nouvelle page, le qrCodeYStart sera currentY
+                }
+                doc.addImage(qrCodeImage, 'PNG', pageWidth - margin - qrCodeSize, Math.max(qrCodeYStart, margin + 5) , qrCodeSize, qrCodeSize);
+                currentY = Math.max(currentY, Math.max(qrCodeYStart, margin + 5) + qrCodeSize + smallLineHeight); // S'assurer que Y est après QR
+                
+                // Réécrire le lien si QR code a potentiellement décalé Y
+                checkYAddPage(smallLineHeight *2);
+                doc.text("Payer en ligne:", margin, currentY); currentY += smallLineHeight;
+                doc.setTextColor(0, 0, 255);
+                doc.textWithLink(paymentUrl, margin, currentY, { url: paymentUrl });
+                doc.setTextColor(0, 0, 0);
+                currentY += smallLineHeight;
+            } else if (paymentUrl) {
+                checkYAddPage(smallLineHeight *2);
+                doc.text("Payer en ligne:", margin, currentY); currentY += smallLineHeight;
+                doc.setTextColor(0, 0, 255);
+                doc.textWithLink(paymentUrl, margin, currentY, { url: paymentUrl });
+                doc.setTextColor(0, 0, 0);
+                currentY += smallLineHeight;
+            }
+
+            // Pied de page
+            const footerText = "Merci de votre confiance.";
+            doc.setFontSize(8);
+            // Pour s'assurer que le footer est en bas, même si currentY est déjà bas
+            const finalFooterY = pageHeight - margin / 1.5; 
+            if (finalFooterY < currentY + 5) { // Si currentY est trop proche ou a dépassé, il faut le mettre en bas
+                 if(!checkYAddPage(10)) { // Si pas de nouvelle page, le mettre à la position calculée
+                    doc.text(footerText, pageWidth / 2, finalFooterY, { align: 'center' });
+                 } else { // Si nouvelle page, le mettre en bas de la nouvelle page
+                     doc.text(footerText, pageWidth / 2, pageHeight - margin / 1.5, { align: 'center' });
+                 }
+            } else {
+                 doc.text(footerText, pageWidth / 2, finalFooterY, { align: 'center' });
+            }
+
+
+            doc.save(`facture-${invoiceNumber.replace(/[\/\s]/g, '_')}-${payerName.replace(/\s+/g, '_')}.pdf`);
+
+        }, 150); 
+    }
+
+</script>
+</body>
+</html>
